@@ -50,6 +50,9 @@
 #include "net/rpl/rpl-private.h"
 #include "net/nbr-table.h"
 #include "net/link-stats.h"
+#if RPL_DAG_MC_NSA_PS
+#include <stdlib.h>
+#endif /* RPL_DAG_MC_NSA_PS */
 
 #define DEBUG DEBUG_NONE
 #include "net/ip/uip-debug.h"
@@ -241,6 +244,131 @@ best_dag(rpl_dag_t *d1, rpl_dag_t *d2)
   return d1->rank < d2->rank ? d1 : d2;
 }
 /*---------------------------------------------------------------------------*/
+#if RPL_DAG_MC_NSA_PS
+static int
+parent_comparison_function(const void * a, const void * b)
+{
+  rpl_parent_t*best = best_parent( *(rpl_parent_t**)a, *(rpl_parent_t**)b );
+  if(best == a) //a better than b
+    return -1;
+  else if(best == b)
+    return 1;
+  else
+    return 0;
+}
+/*---------------------------------------------------------------------------*/
+static int
+record_alternative_parents_in_mc_nsa(rpl_instance_t *instance)
+{
+  PRINTF("RPL: MRHOF: record_parents_in_mc_nsa\n");
+  if(instance != NULL){
+    int fresh_only = 0;
+    rpl_dag_t *dag = instance->current_dag;
+    rpl_parent_t *p;
+
+    if(dag == NULL || dag->instance == NULL || dag->instance->of == NULL) {
+      PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: no dag & dag instance & dag instance objective function\n");
+      return -1;
+    }
+
+    rpl_parent_t *current_preferred_parent = dag->preferred_parent;
+
+    rpl_parent_t* valid_parents[NBR_TABLE_MAX_NEIGHBORS];
+    uint8_t valid_parents_count = 0;
+
+    PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Current node has rank %d\n", dag->rank);
+    rpl_print_neighbor_list();
+    PRINTF("ds6_neighbors:\n");
+    uip_ds6_nbr_t *nbr = nbr_table_head(ds6_neighbors);
+    while(nbr != NULL){
+      PRINTF("ds6_neighbor ");
+      PRINT6ADDR(&nbr->ipaddr);
+      PRINTF(" isrouter %i state: %i\n", nbr->isrouter, nbr->state);
+      nbr = nbr_table_next(ds6_neighbors, nbr);
+    }
+    PRINTF("- Default routes:\n");
+    uip_ds6_defrt_t *r;
+    for(r = uip_ds6_defrt_head(); r != NULL; r = list_item_next(r)) {
+      PRINTF("Defrt via IP address ");
+      PRINT6ADDR(&r->ipaddr);
+      uip_ds6_nbr_t *bestnbr = uip_ds6_nbr_lookup(&r->ipaddr);
+      PRINTF(" lifetime +%lu*%lu sec infinite %i nbr.state %i\n",
+             (unsigned long)r->lifetime.start,
+             (unsigned long)r->lifetime.interval,
+             r->isinfinite,
+             bestnbr->state
+             );
+    }
+    /* Search for the best parent according to the OF */
+    for(p = nbr_table_head(rpl_parents); p != NULL; p = nbr_table_next(rpl_parents, p)) {
+
+      const linkaddr_t *p_addr = rpl_get_parent_lladdr(p);
+      PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Parent %d has rank %d\n", p_addr->u8[LINKADDR_SIZE-1], p->rank);
+
+      /* Exclude parents from other DAGs or announcing an infinite rank */
+      if(p->dag != dag || p->rank == INFINITE_RANK || p->rank < ROOT_RANK(dag->instance) ||
+          best_parent( p, p ) == NULL
+          )
+      {
+        if(p->dag != dag)
+          PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Parent %d has p->dag != dag\n", p_addr->u8[LINKADDR_SIZE-1]);
+        if(p->rank == INFINITE_RANK)
+          PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Parent %d has p->rank == INFINITE_RANK\n", p_addr->u8[LINKADDR_SIZE-1]);
+        if(p->rank < ROOT_RANK(dag->instance))
+          PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Parent %d has p->rank < ROOT_RANK(dag->instance)\n", p_addr->u8[LINKADDR_SIZE-1]);
+        if(best_parent( p, p ) == NULL)
+          PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Parent %d has best_parent( p, p ) == NULL\n", p_addr->u8[LINKADDR_SIZE-1]);
+        if(p->rank < ROOT_RANK(dag->instance)) {
+          PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Parent %d has invalid rank %d\n", p_addr->u8[LINKADDR_SIZE-1], p->rank);
+        }
+        continue;
+      }
+
+      if(fresh_only && !rpl_parent_is_fresh(p)) {
+        PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Parent %d has !rpl_parent_is_fresh(p)\n", p_addr->u8[LINKADDR_SIZE-1]);
+        /* Filter out non-fresh parents if fresh_only is set */
+        continue;
+      }
+
+  #if UIP_ND6_SEND_NS
+      {
+      uip_ds6_nbr_t *nbr = rpl_get_nbr(p);
+      /* Exclude links to a neighbor that is not reachable at a NUD level */
+      if(nbr == NULL || nbr->state != NBR_REACHABLE) {
+        continue;
+      }
+      }
+  #endif /* UIP_ND6_SEND_NS */
+
+      /* Now we have an acceptable parent, add to array */
+      valid_parents[valid_parents_count++] = p;
+    }
+
+    // Sort all the parents based on the objective function
+    qsort(valid_parents, valid_parents_count, sizeof(rpl_parent_t*), parent_comparison_function);
+
+    //Keep upto RPL_DAG_MC_NSA_PS_MAX_ADDRESSES of the highest preferred parents
+    valid_parents_count = MIN(valid_parents_count, RPL_DAG_MC_NSA_PS_MAX_ADDRESSES);
+
+    instance->mc_constraint.obj.nsa.parent_node_set.addresses_count = valid_parents_count;
+    uint8_t address_index;
+    for(address_index = 0; address_index < valid_parents_count; address_index++){
+      uip_ipaddr_t* mc_addr = &instance->mc_constraint.obj.nsa.parent_node_set.addresses[address_index];
+      uip_ipaddr_t* parent_addr = rpl_get_parent_ipaddr(valid_parents[address_index]);
+      uip_ipaddr_copy(mc_addr, parent_addr);
+      PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: copying addr: %i: ", address_index);
+      PRINT6ADDR(&instance->mc_constraint.obj.nsa.parent_node_set.addresses[address_index]);
+      PRINTF("\n");
+    }
+    PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: OK: parents count: %d\n", valid_parents_count);
+    return 0;
+  }
+
+  PRINTF("RPL: MRHOF: record_parents_in_mc_nsa: Error: no default RPL instance\n");
+  return -2;
+}
+#endif /* RPL_DAG_MC_NSA_PS */
+/*---------------------------------------------------------------------------*/
 #if !RPL_WITH_MC
 static void
 update_metric_container(rpl_instance_t *instance)
@@ -267,6 +395,12 @@ update_metric_container(rpl_instance_t *instance)
     instance->mc.flags = 0;
     instance->mc.aggr = RPL_DAG_MC_AGGR_ADDITIVE;
     instance->mc.prec = 0;
+#if RPL_DAG_MC_NSA_PS
+    instance->mc_constraint.type = RPL_DAG_MC_NSA;
+    instance->mc_constraint.flags = (0<<3 /* P */) | (1<<2 /* C */) | (0<<1 /* O */) | (0<<0 /* R */);
+    instance->mc_constraint.aggr = RPL_DAG_MC_AGGR_ADDITIVE;
+    instance->mc_constraint.prec = 1;
+#endif /* RPL_DAG_MC_NSA_PS */
     path_cost = dag->rank;
   } else {
     path_cost = parent_path_cost(dag->preferred_parent);
@@ -295,6 +429,30 @@ update_metric_container(rpl_instance_t *instance)
       PRINTF("RPL: MRHOF, non-supported MC %u\n", instance->mc.type);
       break;
   }
+
+#if RPL_DAG_MC_NSA_PS
+  /* Handle the different constraint MC types */
+  switch(instance->mc_constraint.type) {
+    case RPL_DAG_MC_NONE:
+      break;
+    case RPL_DAG_MC_NSA:
+      record_alternative_parents_in_mc_nsa(instance);
+#if RPL_DAG_MC_NSA_PS_SEND_HALF_ADDRESS
+      const int address_size = sizeof(instance->mc_constraint.obj.nsa.parent_node_set.addresses[0]) / 2; // half the size of an address
+#else /* RPL_DAG_MC_NSA_PS_SEND_HALF_ADDRESS */
+      const int address_size = sizeof(instance->mc_constraint.obj.nsa.parent_node_set.addresses[0]); // the size of an address
+#endif /* RPL_DAG_MC_NSA_PS_SEND_HALF_ADDRESS */
+      instance->mc_constraint.length = 4 + instance->mc_constraint.obj.nsa.parent_node_set.addresses_count * address_size;
+      instance->mc_constraint.obj.nsa.reserved = 0;
+      instance->mc_constraint.obj.nsa.flags = 0;
+      instance->mc_constraint.obj.nsa.parent_node_set.type = 0x01;
+      instance->mc_constraint.obj.nsa.parent_node_set.length = instance->mc_constraint.obj.nsa.parent_node_set.addresses_count * address_size;
+      break;
+    default:
+      PRINTF("RPL: MRHOF, non-supported constraint MC %u\n", instance->mc.type);
+      break;
+  }
+#endif /* RPL_DAG_MC_NSA_PS */
 }
 #endif /* RPL_WITH_MC */
 /*---------------------------------------------------------------------------*/

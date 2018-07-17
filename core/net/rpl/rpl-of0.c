@@ -218,6 +218,10 @@ static void
 update_metric_container(rpl_instance_t *instance)
 {
   instance->mc.type = RPL_DAG_MC_NONE;
+#if RPL_DAG_MC_NSA_PS
+  instance->mc_constraint.type = RPL_DAG_MC_NONE;
+#endif /* RPL_DAG_MC_NSA_PS */
+
 }
 /*---------------------------------------------------------------------------*/
 rpl_of_t rpl_of0 = {
