@@ -699,6 +699,9 @@ rpl_add_parent(rpl_dag_t *dag, rpl_dio_t *dio, uip_ipaddr_t *addr)
       p->dtsn = dio->dtsn;
 #if RPL_WITH_MC
       memcpy(&p->mc, &dio->mc, sizeof(p->mc));
+#if RPL_DAG_MC_NSA_PS
+      memcpy(&p->mc_constraint, &dio->mc_constraint, sizeof(p->mc_constraint));
+#endif /* RPL_DAG_MC_NSA_PS */
 #endif /* RPL_WITH_MC */
     }
   }
@@ -1135,6 +1138,13 @@ rpl_join_instance(uip_ipaddr_t *from, rpl_dio_t *dio)
   instance->mc.flags = dio->mc.flags;
   instance->mc.aggr = dio->mc.aggr;
   instance->mc.prec = dio->mc.prec;
+#if RPL_DAG_MC_NSA_PS
+  instance->mc_constraint.type = dio->mc_constraint.type;
+  instance->mc_constraint.flags = dio->mc_constraint.flags;
+  instance->mc_constraint.aggr = dio->mc_constraint.aggr;
+  instance->mc_constraint.prec = dio->mc_constraint.prec;
+#endif /* RPL_DAG_MC_NSA_PS */
+
   instance->current_dag = dag;
   instance->dtsn_out = RPL_LOLLIPOP_INIT;
 
@@ -1607,6 +1617,9 @@ rpl_process_dio(uip_ipaddr_t *from, rpl_dio_t *dio)
 
 #if RPL_WITH_MC
   memcpy(&p->mc, &dio->mc, sizeof(p->mc));
+#if RPL_DAG_MC_NSA_PS
+  memcpy(&p->mc_constraint, &dio->mc_constraint, sizeof(p->mc_constraint));
+#endif /* RPL_DAG_MC_NSA_PS */
 #endif /* RPL_WITH_MC */
   if(rpl_process_parent_event(instance, p) == 0) {
     PRINTF("RPL: The candidate parent is rejected\n");

@@ -308,6 +308,9 @@ struct rpl_dio {
   rpl_prefix_t destination_prefix;
   rpl_prefix_t prefix_info;
   struct rpl_metric_container mc;
+#if RPL_DAG_MC_NSA_PS
+  struct rpl_metric_container mc_constraint;
+#endif /* RPL_DAG_MC_NSA_PS */
 };
 typedef struct rpl_dio rpl_dio_t;
 

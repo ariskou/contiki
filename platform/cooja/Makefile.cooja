@@ -24,12 +24,26 @@ $(CONTIKI)/tools/cooja/dist/cooja.jar:
 	@echo "Creating COOJA Java archive..."
 	(cd $(CONTIKI)/tools/cooja && ant jar)
 
+# If NO_GUI is defined and equal to 1 then only run on commad line
+ifeq ($(NO_GUI),1)
+QUICKSTART_MODE=-nogui
+else
+QUICKSTART_MODE=-quickstart
+endif
+
+# If COMPILE_ONLY is defined and equal to 1 then only compile, do not execute simulation
+ifeq ($(COMPILE_ONLY),1)
+EXECUTION_MODE=-compile-only
+else
+EXECUTION_MODE=
+endif
+
 # Quickstart rule
 ifneq ($(MAKECMDGOALS),clean)
 .PHONY: $(MAKECMDGOALS)
 .PRECIOUS: $(MAKECMDGOALS)
 $(MAKECMDGOALS): $(CONTIKI)/tools/cooja/dist/cooja.jar
-	 java -mx512m -jar $< -quickstart='$(firstword $(MAKECMDGOALS))' -contiki='$(CONTIKI)'
+	 java -mx512m -jar $< $(QUICKSTART_MODE)='$(firstword $(MAKECMDGOALS))' -contiki='$(CONTIKI)' $(EXECUTION_MODE)
 endif
 
 endif ## QUICKSTART

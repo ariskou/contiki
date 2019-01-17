@@ -72,6 +72,12 @@ typedef uint16_t rpl_ocp_t;
 #define RPL_DAG_MC_AGGR_MINIMUM         2
 #define RPL_DAG_MC_AGGR_MULTIPLICATIVE  3
 
+#if RPL_DAG_MC_NSA_PS
+/* The bit index within the flags field of the rpl_metric_object_nsa structure. */
+#define RPL_DAG_MC_NSA_AGGREGATION      1
+#define RPL_DAG_MC_NSA_OVERLOAD         0
+#endif /* RPL_DAG_MC_NSA_PS */
+
 /* The bit index within the flags field of the rpl_metric_object_energy structure. */
 #define RPL_DAG_MC_ENERGY_INCLUDED	    3
 #define RPL_DAG_MC_ENERGY_TYPE		      1
@@ -86,6 +92,21 @@ typedef uint16_t rpl_ocp_t;
 #define RPL_OCP_OF0     0
 #define RPL_OCP_MRHOF   1
 
+#if RPL_DAG_MC_NSA_PS
+struct rpm_metric_object_nsa_tlv {
+  uint8_t type;
+  uint8_t length;
+  uip_ipaddr_t addresses[RPL_DAG_MC_NSA_PS_MAX_ADDRESSES];
+  uint8_t addresses_count;
+};
+
+struct rpl_metric_object_nsa {
+  uint8_t reserved;
+  uint8_t flags;
+  struct rpm_metric_object_nsa_tlv parent_set;
+};
+#endif /* RPL_DAG_MC_NSA_PS */
+
 struct rpl_metric_object_energy {
   uint8_t flags;
   uint8_t energy_est;
@@ -99,6 +120,9 @@ struct rpl_metric_container {
   uint8_t prec;
   uint8_t length;
   union metric_object {
+#if RPL_DAG_MC_NSA_PS
+    struct rpl_metric_object_nsa nsa;
+#endif /* RPL_DAG_MC_NSA_PS */
     struct rpl_metric_object_energy energy;
     uint16_t etx;
   } obj;
@@ -115,6 +139,9 @@ struct rpl_parent {
   struct rpl_dag *dag;
 #if RPL_WITH_MC
   rpl_metric_container_t mc;
+#if RPL_DAG_MC_NSA_PS
+  rpl_metric_container_t mc_constraint;
+#endif /* RPL_DAG_MC_NSA_PS */
 #endif /* RPL_WITH_MC */
   rpl_rank_t rank;
   uint8_t dtsn;
@@ -219,6 +246,9 @@ typedef struct rpl_of rpl_of_t;
 struct rpl_instance {
   /* DAG configuration */
   rpl_metric_container_t mc;
+#if RPL_DAG_MC_NSA_PS
+  rpl_metric_container_t mc_constraint;
+#endif /* RPL_DAG_MC_NSA_PS */
   rpl_of_t *of;
   rpl_dag_t *current_dag;
   rpl_dag_t dag_table[RPL_MAX_DAG_PER_INSTANCE];

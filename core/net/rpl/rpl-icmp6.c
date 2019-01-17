@@ -361,30 +361,99 @@ dio_input(void)
           RPL_STAT(rpl_stats.malformed_msgs++);
           goto discard;
         }
-        dio.mc.type = buffer[i + 2];
-        dio.mc.flags = buffer[i + 3] << 1;
-        dio.mc.flags |= buffer[i + 4] >> 7;
-        dio.mc.aggr = (buffer[i + 4] >> 4) & 0x3;
-        dio.mc.prec = buffer[i + 4] & 0xf;
-        dio.mc.length = buffer[i + 5];
+        struct rpl_metric_container *dio_mc = &dio.mc;
+#if RPL_DAG_MC_NSA_PS
+        uint8_t flags = (buffer[i + 3] << 1) | (buffer[i + 4] >> 7);
+        if(flags & (1 << 2 /* C */)) /* if its a Constraint populate the constraint MC */
+          dio_mc = &dio.mc_constraint;
+#endif /* RPL_DAG_MC_NSA_PS */
+        dio_mc->type = buffer[i + 2];
+        dio_mc->flags = buffer[i + 3] << 1;
+        dio_mc->flags |= buffer[i + 4] >> 7;
+        dio_mc->aggr = (buffer[i + 4] >> 4) & 0x3;
+        dio_mc->prec = buffer[i + 4] & 0xf;
+        dio_mc->length = buffer[i + 5];
 
-        if(dio.mc.type == RPL_DAG_MC_NONE) {
+        if(dio_mc->type == RPL_DAG_MC_NONE) {
           /* No metric container: do nothing */
-        } else if(dio.mc.type == RPL_DAG_MC_ETX) {
-          dio.mc.obj.etx = get16(buffer, i + 6);
+        } else if(dio_mc->type == RPL_DAG_MC_ETX) {
+          dio_mc->obj.etx = get16(buffer, i + 6);
 
           PRINTF("RPL: DAG MC: type %u, flags %u, aggr %u, prec %u, length %u, ETX %u\n",
-                 (unsigned)dio.mc.type,
-                 (unsigned)dio.mc.flags,
-                 (unsigned)dio.mc.aggr,
-                 (unsigned)dio.mc.prec,
-                 (unsigned)dio.mc.length,
-                 (unsigned)dio.mc.obj.etx);
-        } else if(dio.mc.type == RPL_DAG_MC_ENERGY) {
-          dio.mc.obj.energy.flags = buffer[i + 6];
-          dio.mc.obj.energy.energy_est = buffer[i + 7];
+                 (unsigned) dio_mc->type,
+                 (unsigned) dio_mc->flags,
+                 (unsigned) dio_mc->aggr,
+                 (unsigned) dio_mc->prec,
+                 (unsigned) dio_mc->length,
+                 (unsigned) dio_mc->obj.etx);
+#if RPL_DAG_MC_NSA_PS
+        } else if(dio_mc->type == RPL_DAG_MC_NSA) {
+          dio_mc->obj.nsa.reserved = buffer[i + 6];
+          dio_mc->obj.nsa.flags = buffer[i + 7];
+          dio_mc->obj.nsa.parent_set.type = buffer[i + 8];
+          dio_mc->obj.nsa.parent_set.length = buffer[i + 9];
+          PRINTF("RPL: DAG MC: type %u, flags %u, aggr %u, prec %u, length %u, nsa.reserved %u, nsa.flags %u, nsa.ps.type %u, nsa.ps.length %u\n",
+            (unsigned) dio_mc->type,
+            (unsigned) dio_mc->flags,
+            (unsigned) dio_mc->aggr,
+            (unsigned) dio_mc->prec,
+            (unsigned) dio_mc->length,
+            (unsigned) dio_mc->obj.nsa.reserved,
+            (unsigned) dio_mc->obj.nsa.flags,
+            (unsigned) dio_mc->obj.nsa.parent_set.type,
+            (unsigned) dio_mc->obj.nsa.parent_set.length
+          );
+#if RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION
+          const uint8_t sixlorh_type = buffer[i + 10];
+          int address_size = 0;
+          switch(sixlorh_type) {
+            case 0:
+              address_size = 1;
+              break;
+            case 1:
+              address_size = 2;
+              break;
+            case 2:
+              address_size = 4;
+              break;
+            case 3:
+              address_size = 8;
+              break;
+            case 4:
+              address_size = 16;
+              break;
+            default:
+              PRINTF("RPL: Unhandled 6LoRH type: %u\n", sixlorh_type);
+              goto discard;
+          }
+          dio_mc->obj.nsa.parent_set.addresses_count = (dio_mc->obj.nsa.parent_set.length - 1) / address_size;
+#else /* RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION */
+          const int address_size = sizeof(dio_mc->obj.nsa.parent_set.addresses[0]); // the size of an address
+          dio_mc->obj.nsa.parent_set.addresses_count = dio_mc->obj.nsa.parent_set.length / address_size;
+#endif /* RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION */
+          uint8_t address_index;
+          for(address_index = 0; address_index < dio_mc->obj.nsa.parent_set.addresses_count; address_index++) {
+#if RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION
+            /* Initialize to zero address */
+            uip_ipaddr_copy(&dio_mc->obj.nsa.parent_set.addresses[address_index], &dio.dag_id);
+            PRINTF("RPL: initialize MC NSA PS parent %u address to ", address_index);
+            PRINT6ADDR(&dio_mc->obj.nsa.parent_set.addresses[address_index]);
+            PRINTF("\n");
+            /* copy to the last address_size bytes */
+            memcpy(&dio_mc->obj.nsa.parent_set.addresses[address_index].u8[16 - address_size], &buffer[i + 11 + address_index * address_size], address_size);
+#else /* RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION */
+            memcpy(&dio_mc->obj.nsa.parent_set.addresses[address_index].u8[0], &buffer[i+10+address_index*address_size], address_size);
+#endif /* RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION */
+            PRINTF("RPL: dio_input: read addr: %i: ", address_index);
+            PRINT6ADDR(&dio_mc->obj.nsa.parent_set.addresses[address_index]);
+            PRINTF("\n");
+          }
+#endif /* RPL_DAG_MC_NSA_PS */
+        } else if(dio_mc->type == RPL_DAG_MC_ENERGY) {
+          dio_mc->obj.energy.flags = buffer[i + 6];
+          dio_mc->obj.energy.energy_est = buffer[i + 7];
         } else {
-          PRINTF("RPL: Unhandled DAG MC type: %u\n", (unsigned)dio.mc.type);
+          PRINTF("RPL: Unhandled DAG MC type: %u\n", (unsigned) dio_mc->type);
           goto discard;
         }
         break;
@@ -464,6 +533,70 @@ dio_input(void)
 discard:
   uip_clear_buf();
 }
+/*---------------------------------------------------------------------------*/
+#if RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION
+static void
+sixlorh_compress_addresses(rpl_instance_t *instance, unsigned char *nsa_ps_value_buffer, uint8_t *nsa_ps_value_length) {
+  uint8_t min_common_prefix_size = 16;
+  uint8_t compressed_address_size = 0;
+  uint8_t sixlorh_type;
+  const uint8_t addresses_count = instance->mc_constraint.obj.nsa.parent_set.addresses_count;
+  uint8_t address_index;
+  PRINTF("RPL: MC NSA PS 6LoRH comp: address count %u\n", addresses_count);
+
+  if(instance->current_dag->joined) {
+    const uip_ipaddr_t *dag_root_ipaddress = &instance->current_dag->dag_id;
+    PRINTF("RPL: MC NSA PS 6LoRH comp: Root reference address ");
+    PRINT6ADDR(dag_root_ipaddress);
+    PRINTF("\n");
+
+    for(address_index = 0; address_index < addresses_count; address_index++) {
+      const uip_ipaddr_t *parent_ipaddress = &instance->mc_constraint.obj.nsa.parent_set.addresses[address_index];
+
+      PRINTF("RPL: MC NSA PS 6LoRH comp: Parent %u, address ", address_index);
+      PRINT6ADDR(parent_ipaddress);
+      PRINTF("\n");
+
+      uint8_t common_prefix_size = 0;
+
+      while(common_prefix_size < 16 && dag_root_ipaddress->u8[common_prefix_size] == parent_ipaddress->u8[common_prefix_size]) {
+          common_prefix_size++;
+      }
+
+      PRINTF("RPL: MC NSA PS 6LoRH comp: Parent %u, common prefix %u\n", address_index, common_prefix_size);
+
+      min_common_prefix_size = MIN(min_common_prefix_size, common_prefix_size);
+    }
+  }
+
+  if(min_common_prefix_size == 15) {
+    compressed_address_size = 1;
+    sixlorh_type = 0;
+  } else if(min_common_prefix_size == 14) {
+    compressed_address_size = 2;
+    sixlorh_type = 1;
+  } else if(min_common_prefix_size >= 12) {
+    compressed_address_size = 4;
+    sixlorh_type = 2;
+  } else if(min_common_prefix_size >= 8) {
+    compressed_address_size = 8;
+    sixlorh_type = 3;
+  } else {
+    compressed_address_size = 16;
+    sixlorh_type = 4;
+  }
+
+  *nsa_ps_value_length = 1 /* 6LoRH type */ + compressed_address_size*addresses_count /* compressed addresses */;
+  *nsa_ps_value_buffer = sixlorh_type;
+
+  PRINTF("RPL: MC NSA PS 6LoRH comp: Min common prefix %u, Compressed address size %u, 6LoRh type %u, MC NSA PS TLV length %u\n", min_common_prefix_size, compressed_address_size, sixlorh_type, *nsa_ps_value_length);
+
+  for(address_index = 0; address_index < addresses_count; address_index++) {
+    const uip_ipaddr_t *parent_ipaddress = &instance->mc_constraint.obj.nsa.parent_set.addresses[address_index];
+    memcpy(nsa_ps_value_buffer + 1 + address_index*compressed_address_size, &parent_ipaddress->u8[16-compressed_address_size], compressed_address_size);
+  }
+}
+#endif /* RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION */
 /*---------------------------------------------------------------------------*/
 void
 dio_output(rpl_instance_t *instance, uip_ipaddr_t *uc_addr)
@@ -550,6 +683,65 @@ dio_output(rpl_instance_t *instance, uip_ipaddr_t *uc_addr)
       return;
     }
   }
+
+#if RPL_DAG_MC_NSA_PS
+  if(instance->mc_constraint.type != RPL_DAG_MC_NONE) {
+    instance->of->update_metric_container(instance);
+    PRINTF("RPL: Start RPL_DAG_MC_CONSTRAINT RPL option: pos %i\n", pos);
+    PRINTF("RPL: DAG MC Constraint: ");
+    buffer[pos++] = RPL_OPTION_DAG_METRIC_CONTAINER;
+    PRINTF("RPL option type %u, ", buffer[pos-1]);
+    uint8_t *routing_metric_constraint_object_length = &buffer[pos];
+    pos++;
+    buffer[pos++] = instance->mc_constraint.type;
+    PRINTF("MC type %u, ", buffer[pos-1]);
+    buffer[pos++] = instance->mc_constraint.flags >> 1;
+    PRINTF("MC flags %u, ", buffer[pos-1]);
+    buffer[pos] = (instance->mc_constraint.flags & 1) << 7;
+    buffer[pos++] |= (instance->mc_constraint.aggr << 4) | instance->mc_constraint.prec;
+    PRINTF("MC flag+prec %u\n", buffer[pos-1]);
+    uint8_t *routing_metric_constraint_object_body_length = &buffer[pos];
+    pos++;
+    if(instance->mc_constraint.type == RPL_DAG_MC_NSA) {
+      buffer[pos++] = instance->mc_constraint.obj.nsa.reserved;
+      PRINTF("RPL: DIO MC NSA reserved %u, ", buffer[pos-1]);
+      buffer[pos++] = instance->mc_constraint.obj.nsa.flags;
+      PRINTF("NSA flags %u, ", buffer[pos-1]);
+      buffer[pos++] = instance->mc_constraint.obj.nsa.parent_set.type;
+      PRINTF("NSA/TLV type %u\n", buffer[pos-1]);
+      uint8_t *mc_nsa_ps_tlv_length = &buffer[pos];
+      pos++;
+
+#if RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION
+      sixlorh_compress_addresses(instance, &buffer[pos], mc_nsa_ps_tlv_length);
+      pos += *mc_nsa_ps_tlv_length;
+#else /* RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION */
+      const int address_size = sizeof(instance->mc_constraint.obj.nsa.parent_set.addresses[0]); /* the size of an address */
+      PRINTF("RPL: RPL_DAG_MC_NSA: address_size %i\n", address_size);
+      *mc_nsa_ps_tlv_length = instance->mc_constraint.obj.nsa.parent_set.addresses_count * address_size;
+      uint8_t address_index;
+      for(address_index = 0; address_index < instance->mc_constraint.obj.nsa.parent_set.addresses_count; address_index++) {
+        memcpy(buffer + pos, &instance->mc_constraint.obj.nsa.parent_set.addresses[address_index].u8[0], address_size);
+        PRINTF("RPL: dio_output: write addr: %i: ", address_index);
+        PRINT6ADDR(&instance->mc_constraint.obj.nsa.parent_set.addresses[address_index]);
+        PRINTF("\n");
+        pos += address_size;
+        PRINTF("RPL: RPL_DAG_MC_NSA: pos %i\n", pos);
+      }
+#endif /* RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION */
+      PRINTF("RPL NSA/TLV length %u, ", *mc_nsa_ps_tlv_length);
+      *routing_metric_constraint_object_body_length = 2 + 2 + *mc_nsa_ps_tlv_length; /* 2 bytes NSA fixed fields + 2 bytes for TL in PS TLV + N the PS TLV length */
+      PRINTF("MC object body len %u, ", *routing_metric_constraint_object_body_length);
+      *routing_metric_constraint_object_length = 4 + *routing_metric_constraint_object_body_length; /* 4 bytes DAG MC fixed fields + specific MC object body length */
+      PRINTF("RPL MC obj len %u\n", *routing_metric_constraint_object_length);
+    } else {
+      PRINTF("\n");
+      PRINTF("RPL: Unable to send DIO because of unhandled DAG MC Constraint type %u\n",
+             (unsigned)instance->mc_constraint.type);
+      return;
+    }
+  }
+#endif /* RPL_DAG_MC_NSA_PS */
 #endif /* !RPL_LEAF_ONLY */
 
   /* Always add a DAG configuration option. */

@@ -91,6 +91,31 @@
 #define RPL_DAG_MC RPL_DAG_MC_NONE
 #endif /* RPL_CONF_DAG_MC */
 
+/* The availability of the DIO/MC/NSA parent set extension */
+#ifdef RPL_CONF_DAG_MC_NSA_PS
+#define RPL_DAG_MC_NSA_PS RPL_CONF_DAG_MC_NSA_PS
+#else
+#define RPL_DAG_MC_NSA_PS 0
+#endif /* RPL_CONF_DAG_MC_NSA */
+
+/* The maximum advertised parent address set size when the MC is NSA */
+#if RPL_DAG_MC_NSA_PS
+#ifdef RPL_CONF_DAG_MC_NSA_PS_MAX_ADDRESSES
+#define RPL_DAG_MC_NSA_PS_MAX_ADDRESSES RPL_CONF_DAG_MC_NSA_PS_MAX_ADDRESSES
+#else
+#define RPL_DAG_MC_NSA_PS_MAX_ADDRESSES 1
+#endif /* RPL_CONF_DAG_MC_NSA_PS_MAX_ADDRESSES */
+#endif /* RPL_DAG_MC_NSA_PS */
+
+/* Enable sending only the lower 64bits of the addresses */
+#if RPL_DAG_MC_NSA_PS
+#ifdef RPL_CONF_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION
+#define RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION RPL_CONF_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION
+#else
+#define RPL_DAG_MC_NSA_PS_USE_6LORH_ADDRESS_COMPRESSION 0
+#endif /* RPL_CONF_DAG_MC_NSA_PS_SEND_HALF_ADDRESS */
+#endif /* RPL_DAG_MC_NSA_PS */
+
 /* This value decides which DAG instance we should participate in by default. */
 #ifdef RPL_CONF_DEFAULT_INSTANCE
 #define RPL_DEFAULT_INSTANCE RPL_CONF_DEFAULT_INSTANCE
